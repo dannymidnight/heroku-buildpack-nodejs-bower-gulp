@@ -66,7 +66,7 @@ else
   curl http://www.nasm.us/pub/nasm/releasebuilds/$NVERSION/nasm-$NVERSION.tar.gz -s | tar xz
   cd nasm-$NVERSION
   ./configure >/dev/null 2>&1 && make >/dev/null 2>&1
-  
+
   mkdir -p $vendor_dir/nasm/bin
   mv nasm $vendor_dir/nasm/bin
   chmod +x $vendor_dir/nasm/bin/*
@@ -91,7 +91,7 @@ elif [ -d $cache_dir/node/node_modules ]; then
 
   status "Pruning cached dependencies not specified in package.json"
   npm prune 2>&1 | indent
-  
+
   #prune will delete the bower / gulp modules, this adds it back
   if [ -d $cache_dir/node/node_modules/bower ]; then
     status "Copying bower from cache"
@@ -124,7 +124,7 @@ if [ -f $build_dir/bower.json ]; then
   bower_dir=${bower_dir:=bower_components}
 
   status "Found bower.json - Updating bower locally"
-  
+
   if [ -e node_modules/.bin/bower ]; then
     npm update bower 2>&1 | indent
   else
@@ -155,6 +155,21 @@ fi
     export_env_dir $env_dir
   fi
 
+  if [ "$GIT_SSH_KEY" != "" ]; then
+    status "Detected SSH key for git.  launching ssh-agent and loading key"
+    echo $GIT_SSH_KEY | base64 --decode > id_rsa
+    # launch ssh-agent, we'll use it to serve our ssh key
+    # and kill it towards the end of the buildpack's run
+    eval `ssh-agent -s`
+    # We're not supporting passphrases at this time.  We could pull that in
+    # from config as well, but then we'd have to setup expect or some other
+    # terminal automation tool to feed it into ssh-add.
+    ssh-add id_rsa
+    rm id_rsa
+    # Add github.com to the list of known hosts - ignore the warning or else set -e will abort the deployment
+    ssh -oStrictHostKeyChecking=no -T git@github.com || true
+  fi
+
   status "Installing npm dependencies"
   # Make npm output to STDOUT instead of its default STDERR
   npm install --userconfig $build_dir/.npmrc --production 2>&1 | indent
@@ -162,6 +177,13 @@ fi
   if [ $use_bower ]; then
     status "Installing bower dependencies"
     node_modules/.bin/bower install 2>&1 | indent
+  fi
+
+  if [ "$GIT_SSH_KEY" != "" ]; then
+    # Now that npm has finished running, we shouldn't need the ssh key anymore.  Kill ssh-agent
+    eval `ssh-agent -k`
+    # Clear that sensitive key data from the environment
+    export GIT_SSH_KEY=0
   fi
 )
 
@@ -213,7 +235,7 @@ echo "export PATH=\"\$HOME/vendor/node/bin:\$HOME/bin:\$HOME/node_modules/.bin:\
     else
       npm install gulp 2>&1 | indent
     fi
-    
+
     if [ -n "$GULP_TASK" ]; then
       status "Found gulpfile, running gulp $GULP_TASK task"
       $build_dir/node_modules/.bin/gulp $GULP_TASK
